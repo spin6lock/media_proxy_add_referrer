@@ -24,15 +24,21 @@ def fetch_image(path):
     # 获取请求中的url参数
     image_url = path
     if not image_url:
+        app.logger.warning("no image_url")
         return "Missing URL parameter", 400  # 400 Bad Request响应
 
-    image_url = base64.b64decode(image_url).decode('utf-8')
+    image_url = base64.b64decode(image_url + '==').decode('utf-8')
 
     # 解析URL获取域名
     parsed_url = urlparse(image_url)
     domain_name = extract_main_domain(parsed_url.netloc)
+
+    if domain_name not in config.whitelist:
+        app.logger.warning("domain_name not in whitelist: %s", domain_name)
+        return "Missing URL parameter", 400  # 400 Bad Request响应
+
     new_domain_name = config.domains.get(domain_name, domain_name)
-    app.logger.info('origin:%s domain_name:%s new_domain_name %s', image_url, domain_name, new_domain_name)
+    app.logger.warning('origin: %s domain_name:%s new_domain_name %s', image_url, domain_name, new_domain_name)
     domain = f'{parsed_url.scheme}://{new_domain_name}'
     
     # 为请求添加'Referer'头部并获取图片
@@ -45,11 +51,8 @@ def fetch_image(path):
         response.raise_for_status()
     except requests.RequestException as e:
         app.logger.warning("request exception: %s", str(e))
-        return str(e), 500  # 500 Internal Server Error响应
+        return str(e), 400  # 500 Internal Server Error响应
 
-    # response.cache_control.no_store = True
-        if 'Cache-Control' not in response.headers:
-                    response.headers['Cache-Control'] = 'no-store'
     # 创建一个streaming response传回原图数据
     return Response(response.iter_content(chunk_size=1024), content_type=response.headers['Content-Type'], headers=cache_control)
 
