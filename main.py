@@ -4,6 +4,9 @@ from urllib.parse import urlparse
 import base64
 import re
 import config
+import socket
+from socket import inet_aton
+from struct import unpack
 
 app = Flask(__name__)
 
@@ -11,12 +14,27 @@ app = Flask(__name__)
 def index():
 	return "hello world!"
 
+
 regex_pattern = re.compile(r'([\w\-_]+\.)?([\w\-_]+(\.[\w\-_]+)+)')
 def extract_main_domain(url):
     match = regex_pattern.search(url)
     if match:
         return match.group(2)
     return url
+
+
+def ip2long(ip_addr):
+    return unpack("!L", inet_aton(ip_addr))[0]
+
+
+def is_inner_ipaddress(ip):
+    ip = ip2long(ip)
+    return ip2long("127.0.0.0") >> 24 == ip >> 24 or \
+        ip2long("10.0.0.0") >> 24 == ip >> 24 or \
+        ip2long("172.16.0.0") >> 20 == ip >> 20 or \
+        ip2long("192.168.0.0") >> 16 == ip >> 16 or \
+        ip2long("0.0.0.0") >> 24 == ip >> 24
+
 
 cache_control = {"Cache-Control": "public, immutable"}
 @app.route('/<path:path>', methods=['GET', 'POST'])
@@ -29,6 +47,10 @@ def fetch_image(path):
 
     image_url = base64.b64decode(image_url + '==').decode('utf-8')
 
+    # http/https
+    if not re.match(r"^https?://.*/.*$", image_url):
+        raise BaseException("url format error")
+
     # 解析URL获取域名
     parsed_url = urlparse(image_url)
     domain_name = extract_main_domain(parsed_url.netloc)
@@ -40,13 +62,18 @@ def fetch_image(path):
     new_domain_name = config.domains.get(domain_name, domain_name)
     app.logger.warning('origin: %s domain_name:%s new_domain_name %s', image_url, domain_name, new_domain_name)
     domain = f'{parsed_url.scheme}://{new_domain_name}'
-    
+
+    # 如果是内网地址，终止访问
+    ip_address = socket.getaddrinfo(domain_name, 'http')[0][4][0]
+    if is_inner_ipaddress(ip_address):
+        raise BaseException("inner ip address attack")
+   
     # 为请求添加'Referer'头部并获取图片
     forbid_set = set(['Host', 'X-Forwarded-Host'])
     headers = {key: value for key, value in request.headers if key not in forbid_set}
     headers['Referer'] = domain
     try:
-        response = requests.get(image_url, headers=headers, stream=True)
+        response = requests.get(image_url, headers=headers, stream=True, allow_redirects=False)
         # 确保请求成功
         response.raise_for_status()
     except requests.RequestException as e:
