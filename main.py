@@ -37,6 +37,7 @@ def is_inner_ipaddress(ip):
 
 
 cache_control = {"Cache-Control": "public, immutable"}
+forbid_set = set(['Host', 'X-Forwarded-Host', 'X-Forwarded-For', 'X-Forwarded-Proto', 'Alt-Used'])
 @app.route('/<path:path>', methods=['GET', 'POST'])
 def fetch_image(path):
     # 获取请求中的url参数
@@ -51,6 +52,8 @@ def fetch_image(path):
     if not re.match(r"^https?://.*/.*$", image_url):
         raise BaseException("url format error")
 
+    if image_url.find("https") != 0:
+        image_url = image_url.replace("http", "https", 1)
     # 解析URL获取域名
     parsed_url = urlparse(image_url)
     domain_name = extract_main_domain(parsed_url.netloc)
@@ -59,17 +62,16 @@ def fetch_image(path):
         app.logger.warning("domain_name not in whitelist: %s", domain_name)
         return "Missing URL parameter", 400  # 400 Bad Request响应
 
-    new_domain_name = config.domains.get(domain_name, domain_name)
+    new_domain_name = config.domains.get(domain_name, parsed_url.netloc)
     app.logger.warning('origin: %s domain_name:%s new_domain_name %s', image_url, domain_name, new_domain_name)
     domain = f'{parsed_url.scheme}://{new_domain_name}'
 
     # 如果是内网地址，终止访问
-    ip_address = socket.getaddrinfo(domain_name, 'http')[0][4][0]
+    ip_address = socket.getaddrinfo(parsed_url.netloc, 'https')[0][4][0]
     if is_inner_ipaddress(ip_address):
         raise BaseException("inner ip address attack")
    
     # 为请求添加'Referer'头部并获取图片
-    forbid_set = set(['Host', 'X-Forwarded-Host'])
     headers = {key: value for key, value in request.headers if key not in forbid_set}
     headers['Referer'] = domain
     try:
